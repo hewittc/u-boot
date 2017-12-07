@@ -1,5 +1,9 @@
 if ARCH_MVEBU
 
+config MVEBU_SYS_INFO
+	bool
+	default y
+
 config HAVE_MVEBU_EFUSE
 	bool
 	default n

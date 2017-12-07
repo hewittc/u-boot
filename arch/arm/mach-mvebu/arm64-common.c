@@ -14,6 +14,7 @@
 #include <asm/arch/cpu.h>
 #include <asm/arch/soc.h>
 #include <asm/armv8/mmu.h>
+#include <power/regulator.h>
 
 DECLARE_GLOBAL_DATA_PTR;
 
@@ -46,19 +47,91 @@ const struct mbus_dram_target_info *mvebu_mbus_dram_info(void)
 
 /* DRAM init code ... */
 
-int dram_init_banksize(void)
+static const void *get_memory_reg_prop(const void *fdt, int *lenp)
 {
-	fdtdec_setup_memory_banksize();
+	int offset;
+
+	offset = fdt_path_offset(fdt, "/memory");
+	if (offset < 0)
+		return NULL;
+
+	return fdt_getprop(fdt, offset, "reg", lenp);
+}
+
+__weak int mvebu_dram_init(void)
+{
+	const void *fdt = gd->fdt_blob;
+	const fdt32_t *val;
+	int ac, sc, len;
+
+	ac = fdt_address_cells(fdt, 0);
+	sc = fdt_size_cells(fdt, 0);
+	if (ac < 0 || sc < 1 || sc > 2) {
+		printf("invalid address/size cells\n");
+		return -EINVAL;
+	}
+
+	val = get_memory_reg_prop(fdt, &len);
+	if (len / sizeof(*val) < ac + sc)
+		return -EINVAL;
+
+	val += ac;
+
+	gd->ram_size = fdtdec_get_number(val, sc);
+
+	debug("DRAM size = %08lx\n", (unsigned long)gd->ram_size);
+
+	return 0;
+}
+
+__weak int mvebu_dram_init_banksize(void)
+{
+	const void *fdt = gd->fdt_blob;
+	const fdt32_t *val;
+	int ac, sc, cells, len, i;
+
+	val = get_memory_reg_prop(fdt, &len);
+	if (len < 0)
+		return 1;
+
+	ac = fdt_address_cells(fdt, 0);
+	sc = fdt_size_cells(fdt, 0);
+	if (ac < 1 || sc > 2 || sc < 1 || sc > 2) {
+		printf("invalid address/size cells\n");
+		return 1;
+	}
+
+	cells = ac + sc;
+
+	len /= sizeof(*val);
+
+	for (i = 0; i < CONFIG_NR_DRAM_BANKS && len >= cells;
+	     i++, len -= cells) {
+		gd->bd->bi_dram[i].start = fdtdec_get_number(val, ac);
+		val += ac;
+		gd->bd->bi_dram[i].size = fdtdec_get_number(val, sc);
+		val += sc;
+
+		debug("DRAM bank %d: start = %08lx, size = %08lx\n",
+		      i, (unsigned long)gd->bd->bi_dram[i].start,
+		      (unsigned long)gd->bd->bi_dram[i].size);
+	}
 
 	return 0;
 }
 
 int dram_init(void)
 {
-	if (fdtdec_setup_memory_size() != 0)
-		return -EINVAL;
+	int ret;
+	ret = mvebu_dram_init();
+	return ret;
+}
 
-	return 0;
+int dram_init_banksize(void)
+{
+	int ret;
+	ret = mvebu_dram_init_banksize();
+	return ret;
 }
 
 int arch_cpu_init(void)
@@ -72,6 +145,10 @@ int arch_early_init_r(void)
 	struct udevice *dev;
 	int ret;
 	int i;
+
+	/* Check if any existing regulator should be turned off */
+	if (!of_machine_is_compatible("marvell,armada3710"))
+		regulators_enable_boot_on(true);
 
 	/*
 	 * Loop over all MISC uclass drivers to call the comphy code
@@ -91,6 +168,9 @@ int arch_early_init_r(void)
 	uclass_first_device(UCLASS_AHCI, &dev);
 
 #ifdef CONFIG_DM_PCI
+	/* Set the top of region accessible by PCI to 2GB */
+	gd->pci_ram_top = board_get_usable_ram_top(gd->ram_top);
+
 	/* Trigger PCIe devices detection */
 	pci_init();
 #endif

@@ -56,6 +56,14 @@ int board_early_init_f(void)
 	int off, len;
 	void __iomem *addr;
 
+#ifdef CONFIG_MVEBU_SYS_INFO
+	/*
+	 * Call this function to transfer data from address 0x4000000
+	 * into a global struct, before code relocation.
+	 */
+	sys_info_init();
+#endif
+
 	/* FIXME
 	 * Temporary WA for setting correct pin control values
 	 * until the real pin control driver is awailable.
